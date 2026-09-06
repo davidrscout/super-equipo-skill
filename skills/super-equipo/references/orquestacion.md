@@ -6,19 +6,27 @@ de orquestar un equipo mediano o grande.
 
 ## La escalera de mecanismos (aislamiento real)
 
-Cada especialista es un **agente permanente** en `~/.claude/agents/equipo-<area>.md`;
-su definición ES su system prompt. Elige el mecanismo por capacidad real, en este orden:
+Cada miembro es un **agente permanente** en `~/.claude/agents/`: los 24 leads en
+`equipo-<area>.md` y los 210 especialistas en `equipo-<area>-<slug>.md`. Su definición ES
+su system prompt.
+
+**Antes de elegir mecanismo, elige nivel.** Baja cada slice de área a tecnología concreta
+y contrata al **especialista** siempre que exista; deja el **lead** para cuando haya que
+elegir tecnología o coordinar a varios de los suyos. Los nombres exactos están en
+`roster.md`: se contrata por nombre, y un nombre adivinado falla la llamada.
+
+Elige el mecanismo por capacidad real, en este orden:
 
 1. **Workflow** — por defecto para equipos medianos/grandes. Cada contratación es
-   `agent(slice, { agentType: 'equipo-<area>', ... })`: fan-out en paralelo, `schema`
+   `agent(slice, { agentType: 'equipo-<area>-<slug>', ... })`: fan-out en paralelo, `schema`
    para forzar el formato de entrega, `isolation:'worktree'` cuando varios escriben
    ficheros a la vez en un repo git, `budget` para escalar profundidad. Esta skill te
    instruye a usarlo (constituye el opt-in de la herramienta Workflow).
-2. **Agent** — `subagent_type: 'equipo-<area>'`, varias llamadas en el MISMO mensaje →
-   corren en paralelo. Ideal para equipos pequeños (2–4 especialistas).
+2. **Agent** — `subagent_type: 'equipo-<area>-<slug>'`, varias llamadas en el MISMO
+   mensaje → corren en paralelo. Ideal para equipos pequeños (2–4 especialistas).
 3. **Puente de sesión** — si el `equipo-*` no está registrado aún (se creó en esta
    sesión), agente general cuyo prompt empieza: "PRIMERO lee entero
-   `~/.claude/agents/equipo-<area>.md` y encárnalo como tu identidad y tus
+   `~/.claude/agents/<nombre-del-agente>.md` y encárnalo como tu identidad y tus
    reglas. DESPUÉS ejecuta este encargo:" + slice + contratos + rutas. Misma identidad
    y aislamiento; se declara en la entrega.
 4. **`claude -p` en terminal** — contexto limpio real, tandas de máximo 2 (cada proceso
@@ -87,12 +95,15 @@ const plan = await agent(ENCARGO_Y_CONTEXTO, {
   agentType: 'equipo-arquitecto', label: 'arquitecto', schema: PLAN_SCHEMA,
 })
 // PLAN_SCHEMA: { areas:[{agente,slice,criterios,depende_de[]}], contratos:[{nombre,definicion}] }
+// El campo `agente` lleva el nombre EXACTO del roster: normalmente un especialista
+// ('equipo-backend-go'), y un lead ('equipo-backend') solo cuando el slice cruza
+// varias tecnologias de su area o aun hay que elegir entre ellas.
 
-// FASE 3: cada lead implementa su slice contra los contratos, en contexto limpio
+// FASE 3: cada especialista implementa su slice contra los contratos, en contexto limpio
 phase('Implementación')
 const piezas = await parallel(plan.areas.map(a => () =>
   agent(promptContratacion(a, plan.contratos), {   // slice + contratos + rutas. NADA más.
-    agentType: a.agente,                            // p. ej. 'equipo-backend'
+    agentType: a.agente,                            // p. ej. 'equipo-backend-go'
     label: `impl:${a.agente}`, phase: 'Implementación',
     isolation: 'worktree',                          // solo si escriben a la vez en un repo git
     schema: PIEZA_SCHEMA,
@@ -105,14 +116,15 @@ const integracion = await agent(promptIntegracion(piezas, plan.contratos), {
   agentType: 'equipo-integrador', label: 'integrador', schema: INTEGRACION_SCHEMA,
 })
 
-// FASE 5: revisor adversarial por pieza, en paralelo; nunca revisa quien implementó
+// FASE 5: revisor adversarial por pieza y por sabor; nunca revisa quien implementó
 phase('Revisión')
-const revisiones = await parallel(plan.areas.map(a => () =>
-  agent(promptRevision(a, integracion), {
-    agentType: 'equipo-revisor', label: `review:${a.agente}`,
+const SABORES = ['correccion', 'seguridad']   // + 'rendimiento'/'accesibilidad'/'codigo' segun la pieza
+const revisiones = await parallel(plan.areas.flatMap(a => SABORES.map(s => () =>
+  agent(promptRevision(a, integracion, s), {
+    agentType: `equipo-revisor-${s}`, label: `review:${s}:${a.agente}`,
     phase: 'Revisión', schema: VEREDICTO_SCHEMA,
   })
-)).then(r => r.filter(Boolean))
+))).then(r => r.filter(Boolean))
 
 return { plan, integracion, revisiones }
 ```
@@ -128,10 +140,12 @@ arquitecto (contratos en un párrafo) y de integrador:
 
 ```
 1) Defines los contratos de interfaz (tú, breve).
-2) Un Agent por especialista, MISMO mensaje: subagent_type='equipo-<area>',
+2) Bajas cada slice a tecnología concreta y buscas su nombre exacto en roster.md.
+3) Un Agent por especialista, MISMO mensaje: subagent_type='equipo-<area>-<slug>',
    prompt = slice + contratos + rutas.
-3) Integras sus entregas y lo ejecutas de verdad.
-4) Agent con subagent_type='equipo-revisor' audita; corriges lo que saque.
+4) Integras sus entregas y lo ejecutas de verdad.
+5) Agent con subagent_type='equipo-revisor-correccion' (y '-seguridad' si hay dinero,
+   datos personales o auth de por medio) audita; corriges lo que saque.
 ```
 
 ## Revisión e integración: lo que te toca a ti (Director)
